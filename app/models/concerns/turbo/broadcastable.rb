@@ -234,7 +234,7 @@ module Turbo::Broadcastable
     def broadcast_rendering_with_defaults(options)
       options.tap do |o|
         o[:object] ||= self
-        o[:partial] ||= to_partial_path
+        o[:partial] = to_partial_path if o[:partial].blank? && o[:template].blank?
       end
     end
 end
