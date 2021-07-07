@@ -52,14 +52,14 @@ module Turbo::Broadcastable
     #     broadcasts_to ->(message) { [ message.board, :messages ] }, inserts_by: :prepend, target: "board_messages"
     #   end
     def broadcasts_to(stream, inserts_by: :append, target: broadcast_target_default)
-      after_create_commit  -> { broadcast_action_later_to stream.try(:call, self) || send(stream), action: inserts_by, target: target }
+      after_create_commit  -> { broadcast_action_later_to stream.try(:call, self) || send(stream), action: inserts_by, target: target.try(:call, self) || target }
       after_update_commit  -> { broadcast_replace_later_to stream.try(:call, self) || send(stream) }
       after_destroy_commit -> { broadcast_remove_to stream.try(:call, self) || send(stream) }
     end
 
     # Same as <tt>#broadcasts_to</tt>, but the designated stream is automatically set to the current model.
     def broadcasts(inserts_by: :append, target: broadcast_target_default)
-      after_create_commit  -> { broadcast_action_later action: inserts_by, target: target }
+      after_create_commit  -> { broadcast_action_later action: inserts_by, target: target.try(:call, self) || target }
       after_update_commit  -> { broadcast_replace_later }
       after_destroy_commit -> { broadcast_remove }
     end
@@ -75,8 +75,8 @@ module Turbo::Broadcastable
   #
   #   # Sends <turbo-stream action="remove" target="clearance_5"></turbo-stream> to the stream named "identity:2:clearances"
   #   clearance.broadcast_remove_to examiner.identity, :clearances
-  def broadcast_remove_to(*streamables)
-    Turbo::StreamsChannel.broadcast_remove_to *streamables, target: self
+  def broadcast_remove_to(*streamables, target: self)
+    Turbo::StreamsChannel.broadcast_remove_to *streamables, target: target
   end
 
   # Same as <tt>#broadcast_remove_to</tt>, but the designated stream is automatically set to the current model.
@@ -101,6 +101,38 @@ module Turbo::Broadcastable
   # Same as <tt>#broadcast_replace_to</tt>, but the designated stream is automatically set to the current model.
   def broadcast_replace(**rendering)
     broadcast_replace_to self, **rendering
+  end
+
+  # Insert a rendering of this broadcastable model before the target identified by it's dom id passed as <tt>target</tt>
+  # for subscribers of the stream name identified by the passed <tt>streamables</tt>. The rendering parameters can be set by
+  # appending named arguments to the call. Examples:
+  #
+  #   # Sends <turbo-stream action="before" target="clearance_5"><template><div id="clearance_4">My Clearance</div></template></turbo-stream>
+  #   # to the stream named "identity:2:clearances"
+  #   clearance.broadcast_before_to examiner.identity, :clearances, target: "clearance_5"
+  #
+  #   # Sends <turbo-stream action="before" target="clearance_5"><template><div id="clearance_4">Other partial</div></template></turbo-stream>
+  #   # to the stream named "identity:2:clearances"
+  #   clearance.broadcast_before_to examiner.identity, :clearances, target: "clearance_5",
+  #     partial: "clearances/other_partial", locals: { a: 1 }
+  def broadcast_before_to(*streamables, target:, **rendering)
+    Turbo::StreamsChannel.broadcast_before_to *streamables, target: target, **broadcast_rendering_with_defaults(rendering)
+  end
+
+  # Insert a rendering of this broadcastable model after the target identified by it's dom id passed as <tt>target</tt>
+  # for subscribers of the stream name identified by the passed <tt>streamables</tt>. The rendering parameters can be set by
+  # appending named arguments to the call. Examples:
+  #
+  #   # Sends <turbo-stream action="after" target="clearance_5"><template><div id="clearance_6">My Clearance</div></template></turbo-stream>
+  #   # to the stream named "identity:2:clearances"
+  #   clearance.broadcast_after_to examiner.identity, :clearances, target: "clearance_5"
+  #
+  #   # Sends <turbo-stream action="after" target="clearance_5"><template><div id="clearance_6">Other partial</div></template></turbo-stream>
+  #   # to the stream named "identity:2:clearances"
+  #   clearance.broadcast_after_to examiner.identity, :clearances, target: "clearance_5",
+  #     partial: "clearances/other_partial", locals: { a: 1 }
+  def broadcast_after_to(*streamables, target:, **rendering)
+    Turbo::StreamsChannel.broadcast_after_to *streamables, target: target, **broadcast_rendering_with_defaults(rendering)
   end
 
   # Append a rendering of this broadcastable model to the target identified by it's dom id passed as <tt>target</tt>
@@ -234,6 +266,11 @@ module Turbo::Broadcastable
     def broadcast_rendering_with_defaults(options)
       options.tap do |o|
         o[:object] ||= self
+        # o[:partial] ||= to_partial_path if o[:template].blank?
+
+        # Add the current instance into the locals with the element name (which is the un-namespaced name)
+        # as the key. This parallels how the ActionView::ObjectRenderer would create a local variable.
+        o[:locals] = (o[:locals] || {}).reverse_merge!(model_name.element.to_sym => self)
         o[:partial] ||= to_partial_path if o[:template].blank?
       end
     end
